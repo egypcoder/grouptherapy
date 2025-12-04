@@ -244,6 +244,31 @@ export const radioSettings = pgTable("radio_settings", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// Radio assets (uploaded audio files for radio playback)
+export const radioAssets = pgTable("radio_assets", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  showId: varchar("show_id").references(() => radioShows.id),
+  title: text("title").notNull(),
+  artist: text("artist").notNull(),
+  cloudinaryPublicId: text("cloudinary_public_id"),
+  audioUrl: text("audio_url").notNull(),
+  durationSeconds: integer("duration_seconds").notNull(),
+  uploadedBy: varchar("uploaded_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Radio schedule (when assets are scheduled to play)
+export const radioSchedule = pgTable("radio_schedule", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  assetId: varchar("asset_id").references(() => radioAssets.id).notNull(),
+  showId: varchar("show_id").references(() => radioShows.id),
+  scheduledStart: timestamp("scheduled_start").notNull(),
+  scheduledEnd: timestamp("scheduled_end").notNull(),
+  isRecurring: boolean("is_recurring").default(false),
+  recurrenceRule: text("recurrence_rule"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });
 export const insertArtistSchema = createInsertSchema(artists).omit({ id: true, createdAt: true });
@@ -258,6 +283,8 @@ export const insertTeamMemberSchema = createInsertSchema(teamMembers).omit({ id:
 export const insertContactSchema = createInsertSchema(contacts).omit({ id: true, createdAt: true, status: true });
 export const insertPressAssetSchema = createInsertSchema(pressAssets).omit({ id: true, createdAt: true });
 export const insertRadioSettingsSchema = createInsertSchema(radioSettings).omit({ id: true, updatedAt: true });
+export const insertRadioAssetSchema = createInsertSchema(radioAssets).omit({ id: true, createdAt: true });
+export const insertRadioScheduleSchema = createInsertSchema(radioSchedule).omit({ id: true, createdAt: true });
 
 // Admin user insert and select schemas
 export const insertAdminUserSchema = createInsertSchema(adminUsers).omit({ id: true, createdAt: true, updatedAt: true });
@@ -311,3 +338,9 @@ export type PressAsset = typeof pressAssets.$inferSelect;
 
 export type InsertRadioSettings = z.infer<typeof insertRadioSettingsSchema>;
 export type RadioSettings = typeof radioSettings.$inferSelect;
+
+export type InsertRadioAsset = z.infer<typeof insertRadioAssetSchema>;
+export type RadioAsset = typeof radioAssets.$inferSelect;
+
+export type InsertRadioSchedule = z.infer<typeof insertRadioScheduleSchema>;
+export type RadioScheduleItem = typeof radioSchedule.$inferSelect;

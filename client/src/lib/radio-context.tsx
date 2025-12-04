@@ -8,6 +8,14 @@ interface RadioTrack {
   hostName?: string;
 }
 
+interface RadioAsset {
+  id: string;
+  title: string;
+  artist: string;
+  audioUrl: string;
+  durationSeconds: number;
+}
+
 interface RadioContextType {
   isPlaying: boolean;
   volume: number;
@@ -17,6 +25,7 @@ interface RadioContextType {
   progress: number;
   duration: number;
   listenerCount: number;
+  isScheduled: boolean;
   play: () => void;
   pause: () => void;
   togglePlay: () => void;
@@ -29,7 +38,7 @@ interface RadioContextType {
 const RadioContext = createContext<RadioContextType | undefined>(undefined);
 
 const DEMO_STREAM_URL = "https://stream.zeno.fm/yn65fsaurfhvv";
-const METADATA_POLL_INTERVAL = 10000; // 10 seconds
+const METADATA_POLL_INTERVAL = 10000;
 
 export function RadioProvider({ children }: { children: React.ReactNode }) {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -38,24 +47,113 @@ export function RadioProvider({ children }: { children: React.ReactNode }) {
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
   const [listenerCount, setListenerCount] = useState(127);
+  const [isScheduled, setIsScheduled] = useState(false);
+  const [currentStreamUrl, setCurrentStreamUrl] = useState(DEMO_STREAM_URL);
+  const [currentAsset, setCurrentAsset] = useState<RadioAsset | null>(null);
+  const [startedAt, setStartedAt] = useState<Date | null>(null);
   const [currentTrack, setCurrentTrack] = useState<RadioTrack | null>({
     title: "GroupTherapy Radio",
     artist: "Live Stream",
     coverUrl: undefined,
   });
-  const [isLive] = useState(true);
+  const [isLive, setIsLive] = useState(true);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const sseConnectedRef = useRef(false);
+
+  const initAudio = useCallback((streamUrl: string) => {
+    if (audioRef.current) {
+      const wasPlaying = !audioRef.current.paused;
+      audioRef.current.pause();
+      audioRef.current.src = streamUrl;
+      audioRef.current.load();
+      if (wasPlaying) {
+        audioRef.current.play().catch(console.error);
+      }
+    } else {
+      audioRef.current = new Audio(streamUrl);
+      audioRef.current.volume = volume;
+      
+      audioRef.current.addEventListener("timeupdate", () => {
+        if (audioRef.current) {
+          setProgress(audioRef.current.currentTime);
+          setDuration(audioRef.current.duration || 0);
+        }
+      });
+
+      audioRef.current.addEventListener("loadedmetadata", () => {
+        if (audioRef.current) {
+          setDuration(audioRef.current.duration || 0);
+        }
+      });
+    }
+  }, [volume]);
+
+  const syncPlaybackPosition = useCallback((positionSeconds: number) => {
+    if (audioRef.current && currentAsset && !isLive) {
+      const targetPosition = Math.min(positionSeconds, currentAsset.durationSeconds);
+      if (Math.abs(audioRef.current.currentTime - targetPosition) > 2) {
+        audioRef.current.currentTime = targetPosition;
+      }
+    }
+  }, [currentAsset, isLive]);
+
+  const handleSSEMessage = useCallback((event: MessageEvent) => {
+    try {
+      const data = JSON.parse(event.data);
+      
+      if (data.type === "state" || data.type === "schedule_update") {
+        if (data.isScheduled && data.currentAsset) {
+          setIsScheduled(true);
+          setIsLive(false);
+          setCurrentAsset(data.currentAsset);
+          setCurrentTrack({
+            title: data.currentAsset.title,
+            artist: data.currentAsset.artist,
+            showName: data.showName,
+            hostName: data.hostName,
+          });
+          setDuration(data.currentAsset.durationSeconds);
+          
+          if (data.streamUrl !== currentStreamUrl) {
+            setCurrentStreamUrl(data.streamUrl);
+            initAudio(data.streamUrl);
+          }
+          
+          if (data.startedAt) {
+            setStartedAt(new Date(data.startedAt));
+          }
+          
+          if (data.positionSeconds !== undefined) {
+            syncPlaybackPosition(data.positionSeconds);
+          }
+        } else {
+          setIsScheduled(false);
+          setIsLive(true);
+          setCurrentAsset(null);
+          setCurrentTrack({
+            title: "GroupTherapy Radio",
+            artist: "Live Stream",
+          });
+          
+          if (DEMO_STREAM_URL !== currentStreamUrl) {
+            setCurrentStreamUrl(DEMO_STREAM_URL);
+            initAudio(DEMO_STREAM_URL);
+          }
+        }
+      } else if (data.type === "schedule_deleted") {
+        setIsScheduled(false);
+        setIsLive(true);
+        setCurrentStreamUrl(DEMO_STREAM_URL);
+        initAudio(DEMO_STREAM_URL);
+      }
+    } catch (error) {
+      console.error("Error parsing SSE message:", error);
+    }
+  }, [currentStreamUrl, initAudio, syncPlaybackPosition]);
 
   useEffect(() => {
-    audioRef.current = new Audio(DEMO_STREAM_URL);
-    audioRef.current.volume = volume;
-    
-    audioRef.current.addEventListener("timeupdate", () => {
-      if (audioRef.current) {
-        setProgress(audioRef.current.currentTime);
-        setDuration(audioRef.current.duration || 0);
-      }
-    });
+    initAudio(DEMO_STREAM_URL);
 
     return () => {
       if (audioRef.current) {
@@ -65,33 +163,115 @@ export function RadioProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // Poll for live metadata updates
   useEffect(() => {
-    const fetchMetadata = async () => {
+    const connectSSE = () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+      }
+
       try {
-        const response = await fetch('/api/radio/metadata');
-        if (response.ok) {
-          const data = await response.json();
-          setCurrentTrack({
-            title: data.title || "GroupTherapy Radio",
-            artist: data.artist || "Live Stream",
-            coverUrl: data.coverUrl,
-            showName: data.showName,
-            hostName: data.hostName,
-          });
-          setListenerCount(data.listenerCount || 127);
-        }
+        eventSourceRef.current = new EventSource("/api/radio/stream-state");
+        
+        eventSourceRef.current.onopen = () => {
+          sseConnectedRef.current = true;
+        };
+        
+        eventSourceRef.current.onmessage = handleSSEMessage;
+        
+        eventSourceRef.current.onerror = () => {
+          sseConnectedRef.current = false;
+          eventSourceRef.current?.close();
+          setTimeout(connectSSE, 5000);
+        };
       } catch (error) {
-        console.error('Failed to fetch metadata:', error);
+        console.error("Failed to connect to SSE:", error);
+        sseConnectedRef.current = false;
       }
     };
 
-    if (isLive) {
-      fetchMetadata();
-      const interval = setInterval(fetchMetadata, METADATA_POLL_INTERVAL);
-      return () => clearInterval(interval);
-    }
-  }, [isLive]);
+    connectSSE();
+
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+    };
+  }, [handleSSEMessage]);
+
+  useEffect(() => {
+    const fetchMetadata = async () => {
+      if (sseConnectedRef.current) return;
+
+      try {
+        const response = await fetch("/api/radio/metadata");
+        if (response.ok) {
+          const data = await response.json();
+          
+          if (data.isScheduled && data.currentAsset) {
+            setIsScheduled(true);
+            setIsLive(false);
+            setCurrentAsset(data.currentAsset);
+            setCurrentTrack({
+              title: data.currentAsset.title,
+              artist: data.currentAsset.artist,
+              showName: data.showName,
+              hostName: data.hostName,
+            });
+            setDuration(data.durationSeconds);
+            setListenerCount(data.listenerCount || 127);
+            
+            if (data.streamUrl !== currentStreamUrl) {
+              setCurrentStreamUrl(data.streamUrl);
+              initAudio(data.streamUrl);
+            }
+            
+            if (data.positionSeconds !== undefined) {
+              syncPlaybackPosition(data.positionSeconds);
+            }
+          } else {
+            setIsScheduled(false);
+            setIsLive(true);
+            setCurrentTrack({
+              title: data.title || "GroupTherapy Radio",
+              artist: data.artist || "Live Stream",
+              coverUrl: data.coverUrl,
+              showName: data.showName,
+              hostName: data.hostName,
+            });
+            setListenerCount(data.listenerCount || 127);
+            
+            if (DEMO_STREAM_URL !== currentStreamUrl) {
+              setCurrentStreamUrl(DEMO_STREAM_URL);
+              initAudio(DEMO_STREAM_URL);
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Failed to fetch metadata:", error);
+      }
+    };
+
+    fetchMetadata();
+    const interval = setInterval(fetchMetadata, METADATA_POLL_INTERVAL);
+    return () => clearInterval(interval);
+  }, [currentStreamUrl, initAudio, syncPlaybackPosition]);
+
+  useEffect(() => {
+    if (!isScheduled || !startedAt || !currentAsset) return;
+
+    const updateProgress = () => {
+      const now = Date.now();
+      const startTime = new Date(startedAt).getTime();
+      const elapsed = Math.floor((now - startTime) / 1000);
+      const pos = Math.min(elapsed, currentAsset.durationSeconds);
+      setProgress(pos);
+    };
+
+    updateProgress();
+    const interval = setInterval(updateProgress, 1000);
+    return () => clearInterval(interval);
+  }, [isScheduled, startedAt, currentAsset]);
 
   const play = useCallback(() => {
     if (audioRef.current) {
@@ -139,6 +319,7 @@ export function RadioProvider({ children }: { children: React.ReactNode }) {
         progress,
         duration,
         listenerCount,
+        isScheduled,
         play,
         pause,
         togglePlay,

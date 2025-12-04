@@ -1,8 +1,20 @@
-import type { Express } from "express";
+import type { Express, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { generateSitemap } from "./sitemap";
 import { validateCredentials, createSession, deleteSession, requireAuth, validateSession } from "./auth";
+import { v2 as cloudinary } from "cloudinary";
+
+const DEMO_STREAM_URL = "https://stream.zeno.fm/yn65fsaurfhvv";
+
+const sseClients: Set<Response> = new Set();
+
+function broadcastToSSEClients(data: any) {
+  const message = `data: ${JSON.stringify(data)}\n\n`;
+  sseClients.forEach((client) => {
+    client.write(message);
+  });
+}
 
 export async function registerRoutes(
   httpServer: Server,
@@ -53,24 +65,292 @@ export async function registerRoutes(
 
     res.json({ username });
   });
-  // Radio metadata endpoint
+  // Radio metadata endpoint - returns currently playing track based on schedule
   app.get("/api/radio/metadata", async (req, res) => {
-    // In production, this would fetch from your streaming service API
-    // For now, return demo data with simulated updates
-    const demoTracks = [
-      { title: "Midnight Drive", artist: "Luna Wave", showName: "Morning Therapy", hostName: "DJ Luna" },
-      { title: "Electric Dreams", artist: "Neon Pulse", showName: "Peak Time Sessions", hostName: "Neon Pulse" },
-      { title: "Deep Waters", artist: "Aqua Dreams", showName: "Weekend Warm-Up", hostName: "Aqua Dreams" },
-    ];
+    try {
+      const currentSchedule = await storage.getCurrentScheduledItem();
+      
+      if (currentSchedule) {
+        const asset = await storage.getRadioAssetById(currentSchedule.assetId);
+        if (asset) {
+          const startedAt = new Date(currentSchedule.scheduledStart).getTime();
+          const now = Date.now();
+          const positionSeconds = Math.floor((now - startedAt) / 1000);
+          
+          let show = null;
+          if (currentSchedule.showId) {
+            show = await storage.getRadioShowById(currentSchedule.showId);
+          }
+          
+          return res.json({
+            isScheduled: true,
+            currentAsset: {
+              id: asset.id,
+              title: asset.title,
+              artist: asset.artist,
+              audioUrl: asset.audioUrl,
+              durationSeconds: asset.durationSeconds,
+            },
+            streamUrl: asset.audioUrl,
+            startedAt: currentSchedule.scheduledStart,
+            durationSeconds: asset.durationSeconds,
+            positionSeconds: Math.min(positionSeconds, asset.durationSeconds),
+            showName: show?.title,
+            hostName: show?.hostName,
+            listenerCount: Math.floor(Math.random() * 50) + 100,
+          });
+        }
+      }
+      
+      // Fallback to demo stream when nothing is scheduled
+      const demoTracks = [
+        { title: "Midnight Drive", artist: "Luna Wave", showName: "Morning Therapy", hostName: "DJ Luna" },
+        { title: "Electric Dreams", artist: "Neon Pulse", showName: "Peak Time Sessions", hostName: "Neon Pulse" },
+        { title: "Deep Waters", artist: "Aqua Dreams", showName: "Weekend Warm-Up", hostName: "Aqua Dreams" },
+      ];
 
-    const randomTrack = demoTracks[Math.floor(Math.random() * demoTracks.length)];
-    const listenerCount = Math.floor(Math.random() * 50) + 100; // 100-150 listeners
+      const randomTrack = demoTracks[Math.floor(Math.random() * demoTracks.length)];
+      const listenerCount = Math.floor(Math.random() * 50) + 100;
 
-    res.json({
-      ...randomTrack,
-      listenerCount,
-      coverUrl: undefined,
+      res.json({
+        isScheduled: false,
+        ...randomTrack,
+        streamUrl: DEMO_STREAM_URL,
+        listenerCount,
+        coverUrl: undefined,
+      });
+    } catch (error: any) {
+      console.error("Error fetching radio metadata:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // SSE endpoint for synchronized playback
+  app.get("/api/radio/stream-state", (req, res) => {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.flushHeaders();
+
+    sseClients.add(res);
+
+    // Send initial state
+    (async () => {
+      try {
+        const currentSchedule = await storage.getCurrentScheduledItem();
+        if (currentSchedule) {
+          const asset = await storage.getRadioAssetById(currentSchedule.assetId);
+          if (asset) {
+            const startedAt = new Date(currentSchedule.scheduledStart).getTime();
+            const now = Date.now();
+            const positionSeconds = Math.floor((now - startedAt) / 1000);
+            
+            res.write(`data: ${JSON.stringify({
+              type: "state",
+              isScheduled: true,
+              currentAsset: {
+                id: asset.id,
+                title: asset.title,
+                artist: asset.artist,
+                audioUrl: asset.audioUrl,
+                durationSeconds: asset.durationSeconds,
+              },
+              streamUrl: asset.audioUrl,
+              startedAt: currentSchedule.scheduledStart,
+              positionSeconds: Math.min(positionSeconds, asset.durationSeconds),
+            })}\n\n`);
+          }
+        } else {
+          res.write(`data: ${JSON.stringify({
+            type: "state",
+            isScheduled: false,
+            streamUrl: DEMO_STREAM_URL,
+          })}\n\n`);
+        }
+      } catch (error) {
+        console.error("Error sending initial SSE state:", error);
+      }
+    })();
+
+    // Keep connection alive with heartbeat
+    const heartbeat = setInterval(() => {
+      res.write(":heartbeat\n\n");
+    }, 30000);
+
+    req.on("close", () => {
+      clearInterval(heartbeat);
+      sseClients.delete(res);
     });
+  });
+
+  // Radio Assets CRUD
+  app.get("/api/radio/assets", requireAuth, async (req, res) => {
+    try {
+      const assets = await storage.getAllRadioAssets();
+      res.json(assets);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/radio/assets/:id", requireAuth, async (req, res) => {
+    try {
+      const asset = await storage.getRadioAssetById(req.params.id);
+      if (!asset) return res.status(404).json({ message: "Radio asset not found" });
+      res.json(asset);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/radio/assets", requireAuth, async (req, res) => {
+    try {
+      const asset = await storage.createRadioAsset(req.body);
+      res.json(asset);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.patch("/api/radio/assets/:id", requireAuth, async (req, res) => {
+    try {
+      const asset = await storage.updateRadioAsset(req.params.id, req.body);
+      res.json(asset);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/radio/assets/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteRadioAsset(req.params.id);
+      res.json({ message: "Radio asset deleted" });
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Cloudinary upload signature for secure uploads
+  app.post("/api/radio/assets/upload-signature", requireAuth, async (req, res) => {
+    try {
+      const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+      const apiKey = process.env.CLOUDINARY_API_KEY;
+      const apiSecret = process.env.CLOUDINARY_API_SECRET;
+
+      if (!cloudName || !apiKey || !apiSecret) {
+        return res.status(500).json({ 
+          message: "Cloudinary credentials not configured. Please set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET." 
+        });
+      }
+
+      cloudinary.config({
+        cloud_name: cloudName,
+        api_key: apiKey,
+        api_secret: apiSecret,
+      });
+
+      const timestamp = Math.round(new Date().getTime() / 1000);
+      const folder = "radio-assets";
+      
+      const signature = cloudinary.utils.api_sign_request(
+        {
+          timestamp,
+          folder,
+          resource_type: "video",
+        },
+        apiSecret
+      );
+
+      res.json({
+        signature,
+        timestamp,
+        cloudName,
+        apiKey,
+        folder,
+      });
+    } catch (error: any) {
+      console.error("Error generating upload signature:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Radio Schedule CRUD
+  app.get("/api/radio/schedule", requireAuth, async (req, res) => {
+    try {
+      const schedule = await storage.getAllRadioSchedule();
+      res.json(schedule);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/radio/schedule/:id", requireAuth, async (req, res) => {
+    try {
+      const scheduleItem = await storage.getRadioScheduleById(req.params.id);
+      if (!scheduleItem) return res.status(404).json({ message: "Schedule item not found" });
+      res.json(scheduleItem);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/radio/schedule", requireAuth, async (req, res) => {
+    try {
+      const scheduleItem = await storage.createRadioSchedule(req.body);
+      
+      // Broadcast to SSE clients that schedule has changed
+      const asset = await storage.getRadioAssetById(scheduleItem.assetId);
+      if (asset) {
+        broadcastToSSEClients({
+          type: "schedule_update",
+          scheduleItem,
+          asset: {
+            id: asset.id,
+            title: asset.title,
+            artist: asset.artist,
+            audioUrl: asset.audioUrl,
+            durationSeconds: asset.durationSeconds,
+          },
+        });
+      }
+      
+      res.json(scheduleItem);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.patch("/api/radio/schedule/:id", requireAuth, async (req, res) => {
+    try {
+      const scheduleItem = await storage.updateRadioSchedule(req.params.id, req.body);
+      
+      // Broadcast update to SSE clients
+      broadcastToSSEClients({
+        type: "schedule_update",
+        scheduleItem,
+      });
+      
+      res.json(scheduleItem);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/radio/schedule/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteRadioSchedule(req.params.id);
+      
+      // Broadcast to SSE clients that schedule has changed
+      broadcastToSSEClients({
+        type: "schedule_deleted",
+        scheduleId: req.params.id,
+      });
+      
+      res.json({ message: "Schedule item deleted" });
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
   });
 
   // Sitemap

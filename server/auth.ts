@@ -1,51 +1,58 @@
-
 import { Request, Response, NextFunction } from "express";
 import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 import { storage } from "./storage";
 
-// Simple in-memory session store (for production, use connect-pg-simple with PostgreSQL)
-const sessions = new Map<string, { username: string; expiresAt: number }>();
+const JWT_SECRET = process.env.JWT_SECRET || process.env.SESSION_SECRET || "grouptherapy-default-secret-change-in-production";
+const JWT_EXPIRES_IN = "24h";
 
-// Rate limiting configuration
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MINUTES = 15;
 const ATTEMPT_WINDOW_MINUTES = 15;
 
-export function generateSessionId(): string {
-  return Math.random().toString(36).substring(2) + Date.now().toString(36);
+interface JWTPayload {
+  username: string;
+  iat?: number;
+  exp?: number;
+}
+
+export function generateToken(username: string): string {
+  return jwt.sign({ username }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+}
+
+export function verifyToken(token: string): JWTPayload | null {
+  try {
+    return jwt.verify(token, JWT_SECRET) as JWTPayload;
+  } catch (error) {
+    return null;
+  }
 }
 
 export function createSession(username: string): string {
-  const sessionId = generateSessionId();
-  const expiresAt = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
-  sessions.set(sessionId, { username, expiresAt });
-  return sessionId;
+  return generateToken(username);
 }
 
-export function validateSession(sessionId: string): string | null {
-  const session = sessions.get(sessionId);
-  if (!session) return null;
-  
-  if (Date.now() > session.expiresAt) {
-    sessions.delete(sessionId);
-    return null;
-  }
-  
-  return session.username;
+export function validateSession(token: string): string | null {
+  const payload = verifyToken(token);
+  return payload?.username || null;
 }
 
-export function deleteSession(sessionId: string): void {
-  sessions.delete(sessionId);
+export function deleteSession(_token: string): void {
 }
 
 export async function isRateLimited(username: string): Promise<boolean> {
-  const recentAttempts = await storage.getRecentLoginAttempts(
-    username,
-    ATTEMPT_WINDOW_MINUTES
-  );
-  
-  const failedAttempts = recentAttempts.filter(attempt => !attempt.successful);
-  return failedAttempts.length >= MAX_LOGIN_ATTEMPTS;
+  try {
+    const recentAttempts = await storage.getRecentLoginAttempts(
+      username,
+      ATTEMPT_WINDOW_MINUTES
+    );
+    
+    const failedAttempts = recentAttempts.filter(attempt => !attempt.successful);
+    return failedAttempts.length >= MAX_LOGIN_ATTEMPTS;
+  } catch (error) {
+    console.error("Error checking rate limit:", error);
+    return false;
+  }
 }
 
 export async function validateCredentials(
@@ -53,64 +60,68 @@ export async function validateCredentials(
   password: string,
   ipAddress?: string
 ): Promise<{ valid: boolean; message?: string }> {
-  // Check rate limiting
-  if (await isRateLimited(username)) {
-    await storage.recordLoginAttempt({
-      username,
-      ipAddress,
-      successful: false,
-    });
-    return {
-      valid: false,
-      message: `Too many failed login attempts. Please try again in ${LOCKOUT_DURATION_MINUTES} minutes.`,
-    };
-  }
+  try {
+    if (await isRateLimited(username)) {
+      await storage.recordLoginAttempt({
+        username,
+        ipAddress,
+        successful: false,
+      });
+      return {
+        valid: false,
+        message: `Too many failed login attempts. Please try again in ${LOCKOUT_DURATION_MINUTES} minutes.`,
+      };
+    }
 
-  // Get admin user from database
-  const adminUser = await storage.getAdminUserByUsername(username);
-  
-  if (!adminUser) {
+    const adminUser = await storage.getAdminUserByUsername(username);
+    
+    if (!adminUser) {
+      await storage.recordLoginAttempt({
+        username,
+        ipAddress,
+        successful: false,
+      });
+      return { valid: false, message: "Invalid credentials" };
+    }
+
+    if (!adminUser.isActive) {
+      await storage.recordLoginAttempt({
+        username,
+        ipAddress,
+        successful: false,
+      });
+      return { valid: false, message: "Account is inactive" };
+    }
+
+    const isValid = await bcrypt.compare(password, adminUser.passwordHash);
+    
     await storage.recordLoginAttempt({
       username,
       ipAddress,
-      successful: false,
+      successful: isValid,
     });
+
+    if (isValid) {
+      await storage.updateAdminLastLogin(username);
+      return { valid: true };
+    }
+
     return { valid: false, message: "Invalid credentials" };
+  } catch (error) {
+    console.error("Credential validation error:", error);
+    return { valid: false, message: "Authentication service error" };
   }
-
-  if (!adminUser.isActive) {
-    await storage.recordLoginAttempt({
-      username,
-      ipAddress,
-      successful: false,
-    });
-    return { valid: false, message: "Account is inactive" };
-  }
-
-  const isValid = await bcrypt.compare(password, adminUser.passwordHash);
-  
-  await storage.recordLoginAttempt({
-    username,
-    ipAddress,
-    successful: isValid,
-  });
-
-  if (isValid) {
-    await storage.updateAdminLastLogin(username);
-    return { valid: true };
-  }
-
-  return { valid: false, message: "Invalid credentials" };
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
-  const sessionId = req.headers.authorization?.replace("Bearer ", "");
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.replace("Bearer ", "");
   
-  if (!sessionId) {
+  if (!token) {
     return res.status(401).json({ message: "Authentication required" });
   }
   
-  const username = validateSession(sessionId);
+  const username = validateSession(token);
   if (!username) {
     return res.status(401).json({ message: "Invalid or expired session" });
   }

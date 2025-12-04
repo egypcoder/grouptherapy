@@ -1,510 +1,493 @@
-import { sql } from "drizzle-orm";
-import { type User, type InsertUser, type AdminUser, type InsertAdminUser, type InsertLoginAttempt, type LoginAttempt, type Release, type InsertRelease, type Event, type InsertEvent, type Post, type InsertPost, type Contact, type InsertContact, type Artist, type InsertArtist, type RadioShow, type InsertRadioShow, type Playlist, type InsertPlaylist, type Video, type InsertVideo } from "@shared/schema";
-import { randomUUID } from "crypto";
-
-// Helper function to convert undefined to null
-function nullify<T>(value: T | undefined | null): T | null {
-  return value === undefined ? null : value;
-}
-
-// modify the interface with any CRUD methods
-// you might need
+import { eq, desc, sql, and, lte, gte } from "drizzle-orm";
+import { db } from "./db";
+import {
+  users,
+  adminUsers,
+  loginAttempts,
+  releases,
+  events,
+  posts,
+  contacts,
+  artists,
+  radioShows,
+  playlists,
+  videos,
+  radioSettings,
+  radioAssets,
+  radioSchedule,
+  type User,
+  type InsertUser,
+  type AdminUser,
+  type InsertAdminUser,
+  type InsertLoginAttempt,
+  type LoginAttempt,
+  type Release,
+  type InsertRelease,
+  type Event,
+  type InsertEvent,
+  type Post,
+  type InsertPost,
+  type Contact,
+  type InsertContact,
+  type Artist,
+  type InsertArtist,
+  type RadioShow,
+  type InsertRadioShow,
+  type Playlist,
+  type InsertPlaylist,
+  type Video,
+  type InsertVideo,
+  type RadioSettings,
+  type InsertRadioSettings,
+  type RadioAsset,
+  type InsertRadioAsset,
+  type RadioScheduleItem,
+  type InsertRadioSchedule,
+} from "@shared/schema";
 
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
 
-  // Admin user methods
   getAdminUserByUsername(username: string): Promise<AdminUser | undefined>;
   createAdminUser(user: InsertAdminUser): Promise<AdminUser>;
   updateAdminLastLogin(username: string): Promise<void>;
 
-  // Login attempt tracking
   recordLoginAttempt(attempt: InsertLoginAttempt): Promise<LoginAttempt>;
   getRecentLoginAttempts(username: string, minutes: number): Promise<LoginAttempt[]>;
 
-  // Releases
   getAllReleases(): Promise<Release[]>;
   getReleaseById(id: string): Promise<Release | undefined>;
   createRelease(release: InsertRelease): Promise<Release>;
   updateRelease(id: string, release: Partial<Release>): Promise<Release>;
   deleteRelease(id: string): Promise<void>;
 
-  // Events
   getAllEvents(): Promise<Event[]>;
   getEventById(id: string): Promise<Event | undefined>;
   createEvent(event: InsertEvent): Promise<Event>;
   updateEvent(id: string, event: Partial<Event>): Promise<Event>;
   deleteEvent(id: string): Promise<void>;
 
-  // Posts
   getAllPosts(): Promise<Post[]>;
   getPostById(id: string): Promise<Post | undefined>;
   createPost(post: InsertPost): Promise<Post>;
   updatePost(id: string, post: Partial<Post>): Promise<Post>;
   deletePost(id: string): Promise<void>;
 
-  // Contacts
   getAllContacts(): Promise<Contact[]>;
   getContactById(id: string): Promise<Contact | undefined>;
   createContact(contact: InsertContact): Promise<Contact>;
   updateContact(id: string, contact: Partial<Contact>): Promise<Contact>;
   deleteContact(id: string): Promise<void>;
 
-  // Artists
   getAllArtists(): Promise<Artist[]>;
   getArtistById(id: string): Promise<Artist | undefined>;
   createArtist(artist: InsertArtist): Promise<Artist>;
   updateArtist(id: string, artist: Partial<Artist>): Promise<Artist>;
   deleteArtist(id: string): Promise<void>;
 
-  // Radio Shows
   getAllRadioShows(): Promise<RadioShow[]>;
   getRadioShowById(id: string): Promise<RadioShow | undefined>;
   createRadioShow(show: InsertRadioShow): Promise<RadioShow>;
   updateRadioShow(id: string, show: Partial<RadioShow>): Promise<RadioShow>;
   deleteRadioShow(id: string): Promise<void>;
 
-  // Playlists
   getAllPlaylists(): Promise<Playlist[]>;
   getPlaylistById(id: string): Promise<Playlist | undefined>;
   createPlaylist(playlist: InsertPlaylist): Promise<Playlist>;
   updatePlaylist(id: string, playlist: Partial<Playlist>): Promise<Playlist>;
   deletePlaylist(id: string): Promise<void>;
 
-  // Videos
   getAllVideos(): Promise<Video[]>;
   getVideoById(id: string): Promise<Video | undefined>;
   createVideo(video: InsertVideo): Promise<Video>;
   updateVideo(id: string, video: Partial<Video>): Promise<Video>;
   deleteVideo(id: string): Promise<void>;
+
+  getRadioSettings(): Promise<RadioSettings | undefined>;
+  updateRadioSettings(settings: Partial<InsertRadioSettings>): Promise<RadioSettings>;
+
+  getAllRadioAssets(): Promise<RadioAsset[]>;
+  getRadioAssetById(id: string): Promise<RadioAsset | undefined>;
+  createRadioAsset(asset: InsertRadioAsset): Promise<RadioAsset>;
+  updateRadioAsset(id: string, asset: Partial<RadioAsset>): Promise<RadioAsset>;
+  deleteRadioAsset(id: string): Promise<void>;
+
+  getAllRadioSchedule(): Promise<RadioScheduleItem[]>;
+  getRadioScheduleById(id: string): Promise<RadioScheduleItem | undefined>;
+  getCurrentScheduledItem(): Promise<RadioScheduleItem | undefined>;
+  createRadioSchedule(schedule: InsertRadioSchedule): Promise<RadioScheduleItem>;
+  updateRadioSchedule(id: string, schedule: Partial<RadioScheduleItem>): Promise<RadioScheduleItem>;
+  deleteRadioSchedule(id: string): Promise<void>;
 }
 
-export class MemStorage implements IStorage {
-  private users: Map<string, User>;
-  private adminUsers: Map<string, AdminUser>;
-  private loginAttempts: LoginAttempt[];
-  private releases: Map<string, Release>;
-  private events: Map<string, Event>;
-  private posts: Map<string, Post>;
-  private contacts: Map<string, Contact>;
-  private artists: Map<string, Artist>;
-  private radioShows: Map<string, RadioShow>;
-  private playlists: Map<string, Playlist>;
-  private videos: Map<string, Video>;
-
-  constructor() {
-    this.users = new Map();
-    this.adminUsers = new Map();
-    this.loginAttempts = [];
-    this.releases = new Map();
-    this.events = new Map();
-    this.posts = new Map();
-    this.contacts = new Map();
-    this.artists = new Map();
-    this.radioShows = new Map();
-    this.playlists = new Map();
-    this.videos = new Map();
-
-    // Seed initial data
-    this.seedData();
-  }
-
-  private seedData() {
-    // Seed Artists
-    const artists = [
-      { id: randomUUID(), name: "Luna Wave", slug: "luna-wave", bio: "Electronic music producer from Berlin", imageUrl: "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=400&h=400&fit=crop", featured: true, createdAt: new Date() },
-      { id: randomUUID(), name: "Neon Pulse", slug: "neon-pulse", bio: "Techno artist pushing boundaries", imageUrl: "https://images.unsplash.com/photo-1514320291840-2e0a9bf2a9ae?w=400&h=400&fit=crop", featured: true, createdAt: new Date() },
-      { id: randomUUID(), name: "Aqua Dreams", slug: "aqua-dreams", bio: "Deep house specialist", imageUrl: "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=400&h=400&fit=crop", featured: false, createdAt: new Date() },
-    ];
-    artists.forEach(a => this.artists.set(a.id, a as Artist));
-
-    // Seed Releases
-    const releases = [
-      { id: randomUUID(), title: "Midnight Sessions", slug: "midnight-sessions", artistName: "Luna Wave", coverUrl: "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=400&h=400&fit=crop", type: "album", genres: ["Electronic", "House"], published: true, featured: true, releaseDate: new Date("2024-01-15"), createdAt: new Date() },
-      { id: randomUUID(), title: "Echoes of Tomorrow", slug: "echoes-of-tomorrow", artistName: "Neon Pulse", coverUrl: "https://images.unsplash.com/photo-1514320291840-2e0a9bf2a9ae?w=400&h=400&fit=crop", type: "single", genres: ["Techno"], published: true, featured: false, releaseDate: new Date("2024-02-01"), createdAt: new Date() },
-      { id: randomUUID(), title: "Deep Waters", slug: "deep-waters", artistName: "Aqua Dreams", coverUrl: "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=400&h=400&fit=crop", type: "ep", genres: ["Deep House"], published: true, featured: true, releaseDate: new Date("2024-02-10"), createdAt: new Date() },
-    ];
-    releases.forEach(r => this.releases.set(r.id, r as Release));
-
-    // Seed Events
-    const events = [
-      { id: randomUUID(), title: "GroupTherapy Sessions Vol. 1", slug: "grouptherapy-sessions-vol-1", venue: "Warehouse 23", city: "London", country: "UK", date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), imageUrl: "https://images.unsplash.com/photo-1540039155733-5bb30b53aa14?w=600&h=400&fit=crop", ticketPrice: "25", published: true, featured: true, createdAt: new Date() },
-      { id: randomUUID(), title: "Summer Festival 2024", slug: "summer-festival-2024", venue: "Victoria Park", city: "Manchester", country: "UK", date: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000), imageUrl: "https://images.unsplash.com/photo-1459749411175-04bf5292ceea?w=600&h=400&fit=crop", ticketPrice: "45", published: true, featured: false, createdAt: new Date() },
-    ];
-    events.forEach(e => this.events.set(e.id, e as Event));
-
-    // Seed Posts
-    const posts = [
-      { id: randomUUID(), title: "GroupTherapy Announces Summer Festival 2024 Lineup", slug: "summer-festival-2024-lineup", excerpt: "Get ready for the biggest GroupTherapy event yet!", coverUrl: "https://images.unsplash.com/photo-1459749411175-04bf5292ceea?w=800&h=400&fit=crop", category: "events", published: true, featured: true, publishedAt: new Date("2024-03-01"), authorName: "GroupTherapy Team", createdAt: new Date() },
-      { id: randomUUID(), title: "Luna Wave Drops New Album 'Midnight Sessions'", slug: "luna-wave-midnight-sessions", excerpt: "After two years in the making, Luna Wave delivers her most ambitious project to date.", coverUrl: "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=800&h=400&fit=crop", category: "releases", published: true, featured: false, publishedAt: new Date("2024-02-28"), authorName: "Sarah Chen", createdAt: new Date() },
-    ];
-    posts.forEach(p => this.posts.set(p.id, p as Post));
-
-    // Seed Radio Shows
-    const shows = [
-      { id: randomUUID(), title: "Morning Therapy", slug: "morning-therapy", hostName: "DJ Luna", description: "Wake up with the smoothest electronic beats", dayOfWeek: 1, startTime: "07:00", endTime: "10:00", timezone: "UTC", published: true, isLive: false, createdAt: new Date() },
-      { id: randomUUID(), title: "Peak Time Sessions", slug: "peak-time-sessions", hostName: "Neon Pulse", description: "High-energy techno and house", dayOfWeek: 2, startTime: "20:00", endTime: "23:00", timezone: "UTC", published: true, isLive: true, createdAt: new Date() },
-    ];
-    shows.forEach(s => this.radioShows.set(s.id, s as RadioShow));
-  }
-
+export class DatabaseStorage implements IStorage {
   async getUser(id: string): Promise<User | undefined> {
-    return this.users.get(id);
+    const [user] = await db.select().from(users).where(eq(users.id, id));
+    return user || undefined;
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.username === username,
-    );
+    const [user] = await db.select().from(users).where(eq(users.username, username));
+    return user || undefined;
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
-    const id = randomUUID();
-    const user: User = { ...insertUser, id, createdAt: new Date() };
-    this.users.set(id, user);
+    const [user] = await db.insert(users).values(insertUser).returning();
     return user;
   }
 
   async getAdminUserByUsername(username: string): Promise<AdminUser | undefined> {
-    return Array.from(this.adminUsers.values()).find(
-      (user) => user.username === username,
-    );
+    const [user] = await db.select().from(adminUsers).where(eq(adminUsers.username, username));
+    return user || undefined;
   }
 
   async createAdminUser(insertUser: InsertAdminUser): Promise<AdminUser> {
-    const id = this.adminUsers.size + 1;
-    const adminUser: AdminUser = {
-      ...insertUser,
-      id,
-      isActive: insertUser.isActive ?? true,
-      role: insertUser.role ?? "admin",
-      lastLoginAt: null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
-    this.adminUsers.set(adminUser.username, adminUser);
-    return adminUser;
+    const [user] = await db.insert(adminUsers).values(insertUser).returning();
+    return user;
   }
 
   async updateAdminLastLogin(username: string): Promise<void> {
-    const user = await this.getAdminUserByUsername(username);
-    if (user) {
-      user.lastLoginAt = new Date();
-      user.updatedAt = new Date();
-      this.adminUsers.set(username, user);
-    }
+    await db
+      .update(adminUsers)
+      .set({ lastLoginAt: new Date(), updatedAt: new Date() })
+      .where(eq(adminUsers.username, username));
   }
 
   async recordLoginAttempt(insertAttempt: InsertLoginAttempt): Promise<LoginAttempt> {
-    const attempt: LoginAttempt = {
-      ...insertAttempt,
-      id: this.loginAttempts.length + 1,
-      attemptedAt: new Date(),
-    };
-    this.loginAttempts.push(attempt);
+    const [attempt] = await db.insert(loginAttempts).values(insertAttempt).returning();
     return attempt;
   }
 
   async getRecentLoginAttempts(username: string, minutes: number): Promise<LoginAttempt[]> {
     const cutoffTime = new Date(Date.now() - minutes * 60 * 1000);
-    return this.loginAttempts.filter(
-      (attempt) =>
-        attempt.username === username &&
-        attempt.attemptedAt >= cutoffTime
-    );
+    return await db
+      .select()
+      .from(loginAttempts)
+      .where(
+        sql`${loginAttempts.username} = ${username} AND ${loginAttempts.attemptedAt} >= ${cutoffTime}`
+      );
   }
 
-  // Releases
   async getAllReleases(): Promise<Release[]> {
-    return Array.from(this.releases.values());
+    return await db.select().from(releases).orderBy(desc(releases.createdAt));
   }
 
   async getReleaseById(id: string): Promise<Release | undefined> {
-    return this.releases.get(id);
+    const [release] = await db.select().from(releases).where(eq(releases.id, id));
+    return release || undefined;
   }
 
   async createRelease(release: InsertRelease): Promise<Release> {
-    const id = randomUUID();
-    const newRelease: Release = { ...release, id, createdAt: new Date() };
-    this.releases.set(id, newRelease);
+    const [newRelease] = await db.insert(releases).values(release).returning();
     return newRelease;
   }
 
   async updateRelease(id: string, update: Partial<Release>): Promise<Release> {
-    const existing = this.releases.get(id);
-    if (!existing) throw new Error("Release not found");
-    const updated = { ...existing, ...update };
-    this.releases.set(id, updated);
+    const [updated] = await db
+      .update(releases)
+      .set(update)
+      .where(eq(releases.id, id))
+      .returning();
+    if (!updated) throw new Error("Release not found");
     return updated;
   }
 
   async deleteRelease(id: string): Promise<void> {
-    this.releases.delete(id);
+    await db.delete(releases).where(eq(releases.id, id));
   }
 
-  // Events
   async getAllEvents(): Promise<Event[]> {
-    return Array.from(this.events.values());
+    return await db.select().from(events).orderBy(desc(events.date));
   }
 
   async getEventById(id: string): Promise<Event | undefined> {
-    return this.events.get(id);
+    const [event] = await db.select().from(events).where(eq(events.id, id));
+    return event || undefined;
   }
 
   async createEvent(event: InsertEvent): Promise<Event> {
-    const id = randomUUID();
-    const newEvent: Event = { ...event, id, createdAt: new Date() };
-    this.events.set(id, newEvent);
+    const [newEvent] = await db.insert(events).values(event).returning();
     return newEvent;
   }
 
   async updateEvent(id: string, update: Partial<Event>): Promise<Event> {
-    const existing = this.events.get(id);
-    if (!existing) throw new Error("Event not found");
-    const updated = { ...existing, ...update };
-    this.events.set(id, updated);
+    const [updated] = await db
+      .update(events)
+      .set(update)
+      .where(eq(events.id, id))
+      .returning();
+    if (!updated) throw new Error("Event not found");
     return updated;
   }
 
   async deleteEvent(id: string): Promise<void> {
-    this.events.delete(id);
+    await db.delete(events).where(eq(events.id, id));
   }
 
-  // Posts
   async getAllPosts(): Promise<Post[]> {
-    return Array.from(this.posts.values());
+    return await db.select().from(posts).orderBy(desc(posts.createdAt));
   }
 
   async getPostById(id: string): Promise<Post | undefined> {
-    return this.posts.get(id);
+    const [post] = await db.select().from(posts).where(eq(posts.id, id));
+    return post || undefined;
   }
 
   async createPost(post: InsertPost): Promise<Post> {
-    const id = randomUUID();
-    const newPost: Post = { ...post, id, createdAt: new Date() };
-    this.posts.set(id, newPost);
+    const [newPost] = await db.insert(posts).values(post).returning();
     return newPost;
   }
 
   async updatePost(id: string, update: Partial<Post>): Promise<Post> {
-    const existing = this.posts.get(id);
-    if (!existing) throw new Error("Post not found");
-    const updated = { ...existing, ...update };
-    this.posts.set(id, updated);
+    const [updated] = await db
+      .update(posts)
+      .set(update)
+      .where(eq(posts.id, id))
+      .returning();
+    if (!updated) throw new Error("Post not found");
     return updated;
   }
 
   async deletePost(id: string): Promise<void> {
-    this.posts.delete(id);
+    await db.delete(posts).where(eq(posts.id, id));
   }
 
-  // Contacts
   async getAllContacts(): Promise<Contact[]> {
-    return Array.from(this.contacts.values());
+    return await db.select().from(contacts).orderBy(desc(contacts.createdAt));
   }
 
   async getContactById(id: string): Promise<Contact | undefined> {
-    return this.contacts.get(id);
+    const [contact] = await db.select().from(contacts).where(eq(contacts.id, id));
+    return contact || undefined;
   }
 
   async createContact(contact: InsertContact): Promise<Contact> {
-    const id = randomUUID();
-    const newContact: Contact = {
-      id,
-      name: contact.name,
-      email: contact.email,
-      message: contact.message,
-      subject: nullify(contact.subject),
-      category: nullify(contact.category),
-      attachmentUrl: nullify(contact.attachmentUrl),
-      status: "new",
-      createdAt: new Date(),
-    };
-    this.contacts.set(id, newContact);
+    const [newContact] = await db.insert(contacts).values(contact).returning();
     return newContact;
   }
 
   async updateContact(id: string, update: Partial<Contact>): Promise<Contact> {
-    const existing = this.contacts.get(id);
-    if (!existing) throw new Error("Contact not found");
-    const updated = { ...existing, ...update };
-    this.contacts.set(id, updated);
+    const [updated] = await db
+      .update(contacts)
+      .set(update)
+      .where(eq(contacts.id, id))
+      .returning();
+    if (!updated) throw new Error("Contact not found");
     return updated;
   }
 
   async deleteContact(id: string): Promise<void> {
-    this.contacts.delete(id);
+    await db.delete(contacts).where(eq(contacts.id, id));
   }
 
-  // Artists
   async getAllArtists(): Promise<Artist[]> {
-    return Array.from(this.artists.values());
+    return await db.select().from(artists).orderBy(desc(artists.createdAt));
   }
 
   async getArtistById(id: string): Promise<Artist | undefined> {
-    return this.artists.get(id);
+    const [artist] = await db.select().from(artists).where(eq(artists.id, id));
+    return artist || undefined;
   }
 
   async createArtist(artist: InsertArtist): Promise<Artist> {
-    const id = randomUUID();
-    const newArtist: Artist = {
-      id,
-      name: artist.name,
-      slug: artist.slug,
-      bio: nullify(artist.bio),
-      imageUrl: nullify(artist.imageUrl),
-      spotifyArtistId: nullify(artist.spotifyArtistId),
-      socialLinks: nullify(artist.socialLinks),
-      featured: nullify(artist.featured),
-      createdAt: new Date(),
-    };
-    this.artists.set(id, newArtist);
+    const [newArtist] = await db.insert(artists).values(artist as any).returning();
     return newArtist;
   }
 
   async updateArtist(id: string, update: Partial<Artist>): Promise<Artist> {
-    const existing = this.artists.get(id);
-    if (!existing) throw new Error("Artist not found");
-    const updated = { ...existing, ...update };
-    this.artists.set(id, updated);
+    const [updated] = await db
+      .update(artists)
+      .set(update)
+      .where(eq(artists.id, id))
+      .returning();
+    if (!updated) throw new Error("Artist not found");
     return updated;
   }
 
   async deleteArtist(id: string): Promise<void> {
-    this.artists.delete(id);
+    await db.delete(artists).where(eq(artists.id, id));
   }
 
-  // Radio Shows
   async getAllRadioShows(): Promise<RadioShow[]> {
-    return Array.from(this.radioShows.values());
+    return await db.select().from(radioShows).orderBy(desc(radioShows.createdAt));
   }
 
   async getRadioShowById(id: string): Promise<RadioShow | undefined> {
-    return this.radioShows.get(id);
+    const [show] = await db.select().from(radioShows).where(eq(radioShows.id, id));
+    return show || undefined;
   }
 
   async createRadioShow(show: InsertRadioShow): Promise<RadioShow> {
-    const id = randomUUID();
-    const newShow: RadioShow = {
-      id,
-      title: show.title,
-      slug: show.slug,
-      hostName: show.hostName,
-      description: nullify(show.description),
-      hostBio: nullify(show.hostBio),
-      hostImageUrl: nullify(show.hostImageUrl),
-      coverUrl: nullify(show.coverUrl),
-      streamUrl: nullify(show.streamUrl),
-      recordedUrl: nullify(show.recordedUrl),
-      dayOfWeek: nullify(show.dayOfWeek),
-      startTime: nullify(show.startTime),
-      endTime: nullify(show.endTime),
-      timezone: nullify(show.timezone),
-      isLive: nullify(show.isLive),
-      published: nullify(show.published),
-      createdAt: new Date(),
-    };
-    this.radioShows.set(id, newShow);
+    const [newShow] = await db.insert(radioShows).values(show).returning();
     return newShow;
   }
 
   async updateRadioShow(id: string, update: Partial<RadioShow>): Promise<RadioShow> {
-    const existing = this.radioShows.get(id);
-    if (!existing) throw new Error("Radio show not found");
-    const updated = { ...existing, ...update };
-    this.radioShows.set(id, updated);
+    const [updated] = await db
+      .update(radioShows)
+      .set(update)
+      .where(eq(radioShows.id, id))
+      .returning();
+    if (!updated) throw new Error("Radio show not found");
     return updated;
   }
 
   async deleteRadioShow(id: string): Promise<void> {
-    this.radioShows.delete(id);
+    await db.delete(radioShows).where(eq(radioShows.id, id));
   }
 
-  // Playlists
   async getAllPlaylists(): Promise<Playlist[]> {
-    return Array.from(this.playlists.values());
+    return await db.select().from(playlists).orderBy(desc(playlists.createdAt));
   }
 
   async getPlaylistById(id: string): Promise<Playlist | undefined> {
-    return this.playlists.get(id);
+    const [playlist] = await db.select().from(playlists).where(eq(playlists.id, id));
+    return playlist || undefined;
   }
 
-  async createPlaylist(data: InsertPlaylist): Promise<Playlist> {
-    const id = randomUUID();
-    const playlist: Playlist = {
-      id,
-      title: data.title,
-      slug: data.slug,
-      featured: nullify(data.featured),
-      coverUrl: nullify(data.coverUrl),
-      spotifyUrl: nullify(data.spotifyUrl),
-      published: nullify(data.published),
-      description: nullify(data.description),
-      spotifyPlaylistId: nullify(data.spotifyPlaylistId),
-      trackCount: nullify(data.trackCount),
-      createdAt: new Date(),
-    };
-    this.playlists.set(id, playlist);
-    return playlist;
+  async createPlaylist(playlist: InsertPlaylist): Promise<Playlist> {
+    const [newPlaylist] = await db.insert(playlists).values(playlist).returning();
+    return newPlaylist;
   }
 
   async updatePlaylist(id: string, update: Partial<Playlist>): Promise<Playlist> {
-    const existing = this.playlists.get(id);
-    if (!existing) throw new Error("Playlist not found");
-    const updated = { ...existing, ...update };
-    this.playlists.set(id, updated);
+    const [updated] = await db
+      .update(playlists)
+      .set(update)
+      .where(eq(playlists.id, id))
+      .returning();
+    if (!updated) throw new Error("Playlist not found");
     return updated;
   }
 
   async deletePlaylist(id: string): Promise<void> {
-    this.playlists.delete(id);
+    await db.delete(playlists).where(eq(playlists.id, id));
   }
 
-  // Videos
   async getAllVideos(): Promise<Video[]> {
-    return Array.from(this.videos.values());
+    return await db.select().from(videos).orderBy(desc(videos.createdAt));
   }
 
   async getVideoById(id: string): Promise<Video | undefined> {
-    return this.videos.get(id);
+    const [video] = await db.select().from(videos).where(eq(videos.id, id));
+    return video || undefined;
   }
 
-  async createVideo(data: InsertVideo): Promise<Video> {
-    const id = randomUUID();
-    const video: Video = {
-      id,
-      title: data.title,
-      slug: data.slug,
-      featured: nullify(data.featured),
-      artistId: nullify(data.artistId),
-      artistName: nullify(data.artistName),
-      published: nullify(data.published),
-      description: nullify(data.description),
-      thumbnailUrl: nullify(data.thumbnailUrl),
-      videoUrl: nullify(data.videoUrl),
-      youtubeId: nullify(data.youtubeId),
-      duration: nullify(data.duration),
-      category: nullify(data.category),
-      vimeoId: nullify(data.vimeoId),
-      createdAt: new Date(),
-    };
-    this.videos.set(id, video);
-    return video;
+  async createVideo(video: InsertVideo): Promise<Video> {
+    const [newVideo] = await db.insert(videos).values(video).returning();
+    return newVideo;
   }
 
   async updateVideo(id: string, update: Partial<Video>): Promise<Video> {
-    const existing = this.videos.get(id);
-    if (!existing) throw new Error("Video not found");
-    const updated = { ...existing, ...update };
-    this.videos.set(id, updated);
+    const [updated] = await db
+      .update(videos)
+      .set(update)
+      .where(eq(videos.id, id))
+      .returning();
+    if (!updated) throw new Error("Video not found");
     return updated;
   }
 
   async deleteVideo(id: string): Promise<void> {
-    this.videos.delete(id);
+    await db.delete(videos).where(eq(videos.id, id));
+  }
+
+  async getRadioSettings(): Promise<RadioSettings | undefined> {
+    const [settings] = await db.select().from(radioSettings).limit(1);
+    return settings || undefined;
+  }
+
+  async updateRadioSettings(update: Partial<InsertRadioSettings>): Promise<RadioSettings> {
+    const existing = await this.getRadioSettings();
+    if (existing) {
+      const [updated] = await db
+        .update(radioSettings)
+        .set({ ...update, updatedAt: new Date() })
+        .where(eq(radioSettings.id, existing.id))
+        .returning();
+      return updated;
+    } else {
+      const [newSettings] = await db
+        .insert(radioSettings)
+        .values(update as InsertRadioSettings)
+        .returning();
+      return newSettings;
+    }
+  }
+
+  async getAllRadioAssets(): Promise<RadioAsset[]> {
+    return await db.select().from(radioAssets).orderBy(desc(radioAssets.createdAt));
+  }
+
+  async getRadioAssetById(id: string): Promise<RadioAsset | undefined> {
+    const [asset] = await db.select().from(radioAssets).where(eq(radioAssets.id, id));
+    return asset || undefined;
+  }
+
+  async createRadioAsset(asset: InsertRadioAsset): Promise<RadioAsset> {
+    const [newAsset] = await db.insert(radioAssets).values(asset).returning();
+    return newAsset;
+  }
+
+  async updateRadioAsset(id: string, update: Partial<RadioAsset>): Promise<RadioAsset> {
+    const [updated] = await db
+      .update(radioAssets)
+      .set(update)
+      .where(eq(radioAssets.id, id))
+      .returning();
+    if (!updated) throw new Error("Radio asset not found");
+    return updated;
+  }
+
+  async deleteRadioAsset(id: string): Promise<void> {
+    await db.delete(radioAssets).where(eq(radioAssets.id, id));
+  }
+
+  async getAllRadioSchedule(): Promise<RadioScheduleItem[]> {
+    return await db.select().from(radioSchedule).orderBy(desc(radioSchedule.scheduledStart));
+  }
+
+  async getRadioScheduleById(id: string): Promise<RadioScheduleItem | undefined> {
+    const [schedule] = await db.select().from(radioSchedule).where(eq(radioSchedule.id, id));
+    return schedule || undefined;
+  }
+
+  async getCurrentScheduledItem(): Promise<RadioScheduleItem | undefined> {
+    const now = new Date();
+    const [current] = await db
+      .select()
+      .from(radioSchedule)
+      .where(
+        and(
+          lte(radioSchedule.scheduledStart, now),
+          gte(radioSchedule.scheduledEnd, now)
+        )
+      )
+      .orderBy(desc(radioSchedule.scheduledStart))
+      .limit(1);
+    return current || undefined;
+  }
+
+  async createRadioSchedule(schedule: InsertRadioSchedule): Promise<RadioScheduleItem> {
+    const [newSchedule] = await db.insert(radioSchedule).values(schedule).returning();
+    return newSchedule;
+  }
+
+  async updateRadioSchedule(id: string, update: Partial<RadioScheduleItem>): Promise<RadioScheduleItem> {
+    const [updated] = await db
+      .update(radioSchedule)
+      .set(update)
+      .where(eq(radioSchedule.id, id))
+      .returning();
+    if (!updated) throw new Error("Radio schedule not found");
+    return updated;
+  }
+
+  async deleteRadioSchedule(id: string): Promise<void> {
+    await db.delete(radioSchedule).where(eq(radioSchedule.id, id));
   }
 }
 
-export const storage = new MemStorage();
+export const storage = new DatabaseStorage();
