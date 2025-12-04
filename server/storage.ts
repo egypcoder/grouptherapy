@@ -1,5 +1,14 @@
 import { eq, desc, sql, and, lte, gte } from "drizzle-orm";
-import { db } from "./db";
+
+async function getDb() {
+  try {
+    const mod = await import("./db");
+    return mod.db;
+  } catch (err) {
+    console.error("Database not configured or failed to import:", err);
+    throw err;
+  }
+}
 import {
   users,
   adminUsers,
@@ -124,31 +133,37 @@ export interface IStorage {
 
 export class DatabaseStorage implements IStorage {
   async getUser(id: string): Promise<User | undefined> {
+    const db = await getDb();
     const [user] = await db.select().from(users).where(eq(users.id, id));
     return user || undefined;
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
+    const db = await getDb();
     const [user] = await db.select().from(users).where(eq(users.username, username));
     return user || undefined;
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
+    const db = await getDb();
     const [user] = await db.insert(users).values(insertUser).returning();
     return user;
   }
 
   async getAdminUserByUsername(username: string): Promise<AdminUser | undefined> {
+    const db = await getDb();
     const [user] = await db.select().from(adminUsers).where(eq(adminUsers.username, username));
     return user || undefined;
   }
 
   async createAdminUser(insertUser: InsertAdminUser): Promise<AdminUser> {
+    const db = await getDb();
     const [user] = await db.insert(adminUsers).values(insertUser).returning();
     return user;
   }
 
   async updateAdminLastLogin(username: string): Promise<void> {
+    const db = await getDb();
     await db
       .update(adminUsers)
       .set({ lastLoginAt: new Date(), updatedAt: new Date() })
@@ -156,12 +171,14 @@ export class DatabaseStorage implements IStorage {
   }
 
   async recordLoginAttempt(insertAttempt: InsertLoginAttempt): Promise<LoginAttempt> {
+    const db = await getDb();
     const [attempt] = await db.insert(loginAttempts).values(insertAttempt).returning();
     return attempt;
   }
 
   async getRecentLoginAttempts(username: string, minutes: number): Promise<LoginAttempt[]> {
     const cutoffTime = new Date(Date.now() - minutes * 60 * 1000);
+    const db = await getDb();
     return await db
       .select()
       .from(loginAttempts)
@@ -171,20 +188,24 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getAllReleases(): Promise<Release[]> {
+    const db = await getDb();
     return await db.select().from(releases).orderBy(desc(releases.createdAt));
   }
 
   async getReleaseById(id: string): Promise<Release | undefined> {
+    const db = await getDb();
     const [release] = await db.select().from(releases).where(eq(releases.id, id));
     return release || undefined;
   }
 
   async createRelease(release: InsertRelease): Promise<Release> {
+    const db = await getDb();
     const [newRelease] = await db.insert(releases).values(release).returning();
     return newRelease;
   }
 
   async updateRelease(id: string, update: Partial<Release>): Promise<Release> {
+    const db = await getDb();
     const [updated] = await db
       .update(releases)
       .set(update)
@@ -195,24 +216,29 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteRelease(id: string): Promise<void> {
+    const db = await getDb();
     await db.delete(releases).where(eq(releases.id, id));
   }
 
   async getAllEvents(): Promise<Event[]> {
+    const db = await getDb();
     return await db.select().from(events).orderBy(desc(events.date));
   }
 
   async getEventById(id: string): Promise<Event | undefined> {
+    const db = await getDb();
     const [event] = await db.select().from(events).where(eq(events.id, id));
     return event || undefined;
   }
 
   async createEvent(event: InsertEvent): Promise<Event> {
+    const db = await getDb();
     const [newEvent] = await db.insert(events).values(event).returning();
     return newEvent;
   }
 
   async updateEvent(id: string, update: Partial<Event>): Promise<Event> {
+    const db = await getDb();
     const [updated] = await db
       .update(events)
       .set(update)
@@ -223,24 +249,29 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteEvent(id: string): Promise<void> {
+    const db = await getDb();
     await db.delete(events).where(eq(events.id, id));
   }
 
   async getAllPosts(): Promise<Post[]> {
+    const db = await getDb();
     return await db.select().from(posts).orderBy(desc(posts.createdAt));
   }
 
   async getPostById(id: string): Promise<Post | undefined> {
+    const db = await getDb();
     const [post] = await db.select().from(posts).where(eq(posts.id, id));
     return post || undefined;
   }
 
   async createPost(post: InsertPost): Promise<Post> {
+    const db = await getDb();
     const [newPost] = await db.insert(posts).values(post).returning();
     return newPost;
   }
 
   async updatePost(id: string, update: Partial<Post>): Promise<Post> {
+    const db = await getDb();
     const [updated] = await db
       .update(posts)
       .set(update)
@@ -251,24 +282,29 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deletePost(id: string): Promise<void> {
+    const db = await getDb();
     await db.delete(posts).where(eq(posts.id, id));
   }
 
   async getAllContacts(): Promise<Contact[]> {
+    const db = await getDb();
     return await db.select().from(contacts).orderBy(desc(contacts.createdAt));
   }
 
   async getContactById(id: string): Promise<Contact | undefined> {
+    const db = await getDb();
     const [contact] = await db.select().from(contacts).where(eq(contacts.id, id));
     return contact || undefined;
   }
 
   async createContact(contact: InsertContact): Promise<Contact> {
+    const db = await getDb();
     const [newContact] = await db.insert(contacts).values(contact).returning();
     return newContact;
   }
 
   async updateContact(id: string, update: Partial<Contact>): Promise<Contact> {
+    const db = await getDb();
     const [updated] = await db
       .update(contacts)
       .set(update)
@@ -279,24 +315,29 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteContact(id: string): Promise<void> {
+    const db = await getDb();
     await db.delete(contacts).where(eq(contacts.id, id));
   }
 
   async getAllArtists(): Promise<Artist[]> {
+    const db = await getDb();
     return await db.select().from(artists).orderBy(desc(artists.createdAt));
   }
 
   async getArtistById(id: string): Promise<Artist | undefined> {
+    const db = await getDb();
     const [artist] = await db.select().from(artists).where(eq(artists.id, id));
     return artist || undefined;
   }
 
   async createArtist(artist: InsertArtist): Promise<Artist> {
+    const db = await getDb();
     const [newArtist] = await db.insert(artists).values(artist as any).returning();
     return newArtist;
   }
 
   async updateArtist(id: string, update: Partial<Artist>): Promise<Artist> {
+    const db = await getDb();
     const [updated] = await db
       .update(artists)
       .set(update)
@@ -307,24 +348,29 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteArtist(id: string): Promise<void> {
+    const db = await getDb();
     await db.delete(artists).where(eq(artists.id, id));
   }
 
   async getAllRadioShows(): Promise<RadioShow[]> {
+    const db = await getDb();
     return await db.select().from(radioShows).orderBy(desc(radioShows.createdAt));
   }
 
   async getRadioShowById(id: string): Promise<RadioShow | undefined> {
+    const db = await getDb();
     const [show] = await db.select().from(radioShows).where(eq(radioShows.id, id));
     return show || undefined;
   }
 
   async createRadioShow(show: InsertRadioShow): Promise<RadioShow> {
+    const db = await getDb();
     const [newShow] = await db.insert(radioShows).values(show).returning();
     return newShow;
   }
 
   async updateRadioShow(id: string, update: Partial<RadioShow>): Promise<RadioShow> {
+    const db = await getDb();
     const [updated] = await db
       .update(radioShows)
       .set(update)
@@ -335,24 +381,29 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteRadioShow(id: string): Promise<void> {
+    const db = await getDb();
     await db.delete(radioShows).where(eq(radioShows.id, id));
   }
 
   async getAllPlaylists(): Promise<Playlist[]> {
+    const db = await getDb();
     return await db.select().from(playlists).orderBy(desc(playlists.createdAt));
   }
 
   async getPlaylistById(id: string): Promise<Playlist | undefined> {
+    const db = await getDb();
     const [playlist] = await db.select().from(playlists).where(eq(playlists.id, id));
     return playlist || undefined;
   }
 
   async createPlaylist(playlist: InsertPlaylist): Promise<Playlist> {
+    const db = await getDb();
     const [newPlaylist] = await db.insert(playlists).values(playlist).returning();
     return newPlaylist;
   }
 
   async updatePlaylist(id: string, update: Partial<Playlist>): Promise<Playlist> {
+    const db = await getDb();
     const [updated] = await db
       .update(playlists)
       .set(update)
@@ -363,24 +414,29 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deletePlaylist(id: string): Promise<void> {
+    const db = await getDb();
     await db.delete(playlists).where(eq(playlists.id, id));
   }
 
   async getAllVideos(): Promise<Video[]> {
+    const db = await getDb();
     return await db.select().from(videos).orderBy(desc(videos.createdAt));
   }
 
   async getVideoById(id: string): Promise<Video | undefined> {
+    const db = await getDb();
     const [video] = await db.select().from(videos).where(eq(videos.id, id));
     return video || undefined;
   }
 
   async createVideo(video: InsertVideo): Promise<Video> {
+    const db = await getDb();
     const [newVideo] = await db.insert(videos).values(video).returning();
     return newVideo;
   }
 
   async updateVideo(id: string, update: Partial<Video>): Promise<Video> {
+    const db = await getDb();
     const [updated] = await db
       .update(videos)
       .set(update)
@@ -391,10 +447,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteVideo(id: string): Promise<void> {
+    const db = await getDb();
     await db.delete(videos).where(eq(videos.id, id));
   }
 
   async getRadioSettings(): Promise<RadioSettings | undefined> {
+    const db = await getDb();
     const [settings] = await db.select().from(radioSettings).limit(1);
     return settings || undefined;
   }
@@ -402,6 +460,7 @@ export class DatabaseStorage implements IStorage {
   async updateRadioSettings(update: Partial<InsertRadioSettings>): Promise<RadioSettings> {
     const existing = await this.getRadioSettings();
     if (existing) {
+      const db = await getDb();
       const [updated] = await db
         .update(radioSettings)
         .set({ ...update, updatedAt: new Date() })
@@ -409,6 +468,7 @@ export class DatabaseStorage implements IStorage {
         .returning();
       return updated;
     } else {
+      const db = await getDb();
       const [newSettings] = await db
         .insert(radioSettings)
         .values(update as InsertRadioSettings)
@@ -418,20 +478,24 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getAllRadioAssets(): Promise<RadioAsset[]> {
+    const db = await getDb();
     return await db.select().from(radioAssets).orderBy(desc(radioAssets.createdAt));
   }
 
   async getRadioAssetById(id: string): Promise<RadioAsset | undefined> {
+    const db = await getDb();
     const [asset] = await db.select().from(radioAssets).where(eq(radioAssets.id, id));
     return asset || undefined;
   }
 
   async createRadioAsset(asset: InsertRadioAsset): Promise<RadioAsset> {
+    const db = await getDb();
     const [newAsset] = await db.insert(radioAssets).values(asset).returning();
     return newAsset;
   }
 
   async updateRadioAsset(id: string, update: Partial<RadioAsset>): Promise<RadioAsset> {
+    const db = await getDb();
     const [updated] = await db
       .update(radioAssets)
       .set(update)
@@ -442,20 +506,24 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteRadioAsset(id: string): Promise<void> {
+    const db = await getDb();
     await db.delete(radioAssets).where(eq(radioAssets.id, id));
   }
 
   async getAllRadioSchedule(): Promise<RadioScheduleItem[]> {
+    const db = await getDb();
     return await db.select().from(radioSchedule).orderBy(desc(radioSchedule.scheduledStart));
   }
 
   async getRadioScheduleById(id: string): Promise<RadioScheduleItem | undefined> {
+    const db = await getDb();
     const [schedule] = await db.select().from(radioSchedule).where(eq(radioSchedule.id, id));
     return schedule || undefined;
   }
 
   async getCurrentScheduledItem(): Promise<RadioScheduleItem | undefined> {
     const now = new Date();
+    const db = await getDb();
     const [current] = await db
       .select()
       .from(radioSchedule)
@@ -471,11 +539,13 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createRadioSchedule(schedule: InsertRadioSchedule): Promise<RadioScheduleItem> {
+    const db = await getDb();
     const [newSchedule] = await db.insert(radioSchedule).values(schedule).returning();
     return newSchedule;
   }
 
   async updateRadioSchedule(id: string, update: Partial<RadioScheduleItem>): Promise<RadioScheduleItem> {
+    const db = await getDb();
     const [updated] = await db
       .update(radioSchedule)
       .set(update)
@@ -486,6 +556,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteRadioSchedule(id: string): Promise<void> {
+    const db = await getDb();
     await db.delete(radioSchedule).where(eq(radioSchedule.id, id));
   }
 }
