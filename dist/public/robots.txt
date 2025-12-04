@@ -1,0 +1,11 @@
+
+# Allow all search engines to crawl the site
+User-agent: *
+Allow: /
+
+# Disallow admin pages from search engines
+User-agent: *
+Disallow: /admin/
+
+# Sitemap location
+Sitemap: https://grouptherapy.com/sitemap.xml
