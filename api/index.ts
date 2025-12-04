@@ -1,18 +1,26 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { createApp, initializeAppForServerless } from "../server/app";
 
-let app: ReturnType<typeof createApp> | null = null;
+let app: any | null = null;
 let initialized = false;
+let createAppFn: any = null;
+let initializeAppForServerlessFn: any = null;
 
 async function getApp() {
   try {
+    if (!createAppFn || !initializeAppForServerlessFn) {
+      // lazy-import server app to avoid throwing at module initialization
+      const mod = await import("../server/app");
+      createAppFn = mod.createApp;
+      initializeAppForServerlessFn = mod.initializeAppForServerless;
+    }
+
     if (!app) {
       console.log("Creating Express app...");
-      app = createApp();
+      app = createAppFn();
     }
     if (!initialized) {
       console.log("Initializing app for serverless...");
-      await initializeAppForServerless(app);
+      await initializeAppForServerlessFn(app);
       initialized = true;
       console.log("App initialized successfully");
     }
