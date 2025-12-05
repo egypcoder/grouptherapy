@@ -7,7 +7,7 @@
     "dev": "NODE_ENV=development tsx server/index.ts",
     "build": "npm run build:client && npm run build:server",
     "build:client": "vite build",
-    "build:server": "tsc -p tsconfig.server.json"
+    "build:server": "tsc -p tsconfig.server.json",
     "start": "NODE_ENV=production node dist/index.cjs",
     "check": "tsc --noEmit",
     "seed-admin": "tsx server/seed-admin.ts",
