@@ -1,54 +1,23 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import serverless from "serverless-http";
 import { createApp, initializeAppForServerless } from "../server/app";
 
-let app: ReturnType<typeof createApp> | null = null;
-let initialized = false;
+let handler: any;
 
-async function getApp() {
+export default async function (req: VercelRequest, res: VercelResponse) {
   try {
-    if (!app) {
-      console.log("Creating Express app...");
-      app = createApp();
-    }
-    if (!initialized) {
-      console.log("Initializing app for serverless...");
+    if (!handler) {
+      const app = createApp();
       await initializeAppForServerless(app);
-      initialized = true;
-      console.log("App initialized successfully");
+      handler = serverless(app);
     }
-    return app;
-  } catch (error) {
-    console.error("Failed to initialize app:", error);
-    throw error;
-  }
-}
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  try {
-    const expressApp = await getApp();
-    return new Promise<void>((resolve, reject) => {
-      expressApp(req as any, res as any, (err?: any) => {
-        if (err) {
-          console.error("Express error:", err);
-          if (!res.headersSent) {
-            res.status(500).json({ 
-              message: "Internal server error",
-              error: process.env.NODE_ENV === "production" ? undefined : err.message 
-            });
-          }
-          reject(err);
-        } else {
-          resolve();
-        }
-      });
-    });
-  } catch (error) {
-    console.error("Handler error:", error);
+    return handler(req, res);
+  } catch (err: any) {
+    console.error("Serverless crash:", err);
+
     if (!res.headersSent) {
-      res.status(500).json({ 
-        message: "Internal server error",
-        error: process.env.NODE_ENV === "production" ? undefined : String(error)
-      });
+      res.status(500).json({ message: "Internal Server Error" });
     }
   }
 }
