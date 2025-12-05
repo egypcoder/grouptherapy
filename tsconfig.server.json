@@ -4,7 +4,7 @@
     "outDir": "dist/server",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "noEmit": false,
+    "noEmit": true,
     "isolatedModules": false
   },
   "include": ["server/**/*", "shared/**/*"]
